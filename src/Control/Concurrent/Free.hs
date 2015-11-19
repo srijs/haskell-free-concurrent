@@ -95,7 +95,7 @@ retractConcurrentIO = foldConcurrentM $ \action -> do
 foldA :: Applicative g => (forall x. f x -> g x) -> F f a -> Maybe (g a)
 foldA f = retractA . hoist f
 
--- | Given a natural transformation from @f@ to @g@, this gives a canonical monoidal natural transformation from @F f@ to @g@.
+-- | Given a natural transformation from @f@ to @m@, this gives a canonical monoidal natural transformation from @F f@ to @m@.
 foldM :: Monad m => (forall x. f x -> m x) -> F f a -> m a
 foldM f = retractM . hoist f
 
