@@ -3,7 +3,7 @@
 
 name:                free-concurrent
 version:             0.1.0.0
--- synopsis:            
+synopsis:            Free monads suitable for concurrent computation
 -- description:         
 homepage:            https://github.com/srijs/haskell-free-concurrent
 license:             MIT
