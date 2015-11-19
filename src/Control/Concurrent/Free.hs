@@ -48,18 +48,18 @@ retractM (Pure a) = pure a
 retractM (Ap x g y) = retractM y >>= \z -> z <$> g <$> x
 retractM (Join x) = join . retractM $ fmap retractM x
 
-retractConcurrentM :: Monad f => (forall x. f x -> f (f x)) -> F f a -> f a
-retractConcurrentM run (Pure x) = return x
-retractConcurrentM run (Ap x g y) = do
+foldConcurrentM :: Monad m => (forall x. f x -> m (m x)) -> F f a -> m a
+foldConcurrentM run (Pure x) = return x
+foldConcurrentM run (Ap x g y) = do
   v <- run x
-  f <- retractConcurrentM run y
+  f <- foldConcurrentM run y
   f . g <$> v
-retractConcurrentM run (Join x) = do
-  y <- retractConcurrentM run x
-  retractConcurrentM run y
+foldConcurrentM run (Join x) = do
+  y <- foldConcurrentM run x
+  foldConcurrentM run y
 
 retractConcurrentIO :: F IO a -> IO a
-retractConcurrentIO = retractConcurrentM $ \action -> do
+retractConcurrentIO = foldConcurrentM $ \action -> do
   v <- newEmptyMVar
   forkIO $ try action >>= putMVar v
   return $ do
