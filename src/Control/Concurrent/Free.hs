@@ -21,21 +21,19 @@ import Control.Monad (join)
 data F f a where
   Pure :: a -> F f a
   Lift :: f x -> (x -> a) -> F f a
-  Ap   :: f x -> (x -> a) -> F f (a -> b) -> F f b
+  Ap   :: F f a -> F f (a -> b) -> F f b
   Join :: F f (F f a) -> F f a
 
 instance Functor (F f) where
   fmap f (Pure a) = Pure (f a)
   fmap f (Lift x g) = Lift x (f . g)
-  fmap f (Ap x g y) = Ap x g (fmap f <$> y)
+  fmap f (Ap x y) = Ap x (fmap f <$> y)
   fmap f (Join x) = Join (fmap f <$> x)
 
 instance Applicative (F f) where
   pure = Pure
   Pure f <*> y = fmap f y
-  Lift x g <*> y = Ap x g (flip id <$> y)
-  Ap x g y <*> z = Ap x g (flip <$> y <*> z)
-  Join x <*> y = Join ((\z -> z <*> y) <$> x)
+  x <*> y = Ap y x
 
 instance Monad (F f) where
   return = pure
@@ -45,27 +43,27 @@ instance Monad (F f) where
 
 -- | Lifts an @f a@ into a @F f a@.
 liftF :: f a -> F f a
-liftF x = Ap x id (Pure id)
+liftF x = Lift x id
 
 -- | Given a natural transformation from @f@ to @g@ this gives a monoidal natural transformation from @F f@ to @F g@.
 hoist :: (forall a. f a -> g a) -> F f a -> F g a
 hoist f (Pure a) = Pure a
 hoist f (Lift x g) = Lift (f x) g
-hoist f (Ap x g y) = Ap (f x) g (hoist f y)
+hoist f (Ap x y) = Ap (hoist f x) (hoist f y)
 hoist f (Join x) = Join (hoist f (fmap (hoist f) x))
 
 -- | Partially interprets the free monad over @f@ using the semantics for 'pure' and '<*>' given by the 'Applicative' instance for @f@. If it encounters a monadic join, the result is 'Nothing'.
 retractA :: Applicative f => F f a -> Maybe (f a)
 retractA (Pure a) = Just (pure a)
 retractA (Lift x g) = Just (fmap g x)
-retractA (Ap x g y) = (\z -> z <*> fmap g x) <$> retractA y
+retractA (Ap x y) = liftA2 (<*>) (retractA y) (retractA x)
 retractA (Join x) = Nothing
 
 -- | Interprets the free monad over @f@ using the semantics for 'return' and '>>=' given by the 'Monad' instance for @f@.
 retractM :: Monad f => F f a -> f a
 retractM (Pure a) = pure a
 retractM (Lift x g) = fmap g x
-retractM (Ap x g y) = retractM y >>= \z -> z <$> g <$> x
+retractM (Ap x y) = retractM y <*> retractM x
 retractM (Join x) = join . retractM $ fmap retractM x
 
 -- | Interprets the free monad over @f@ using the
@@ -79,10 +77,8 @@ retractM (Join x) = join . retractM $ fmap retractM x
 foldConcurrentM :: Monad m => (forall x. f x -> m (m x)) -> F f a -> m a
 foldConcurrentM run (Pure a) = return a
 foldConcurrentM run (Lift x g) = run x >>= fmap g
-foldConcurrentM run (Ap x g y) = do
-  v <- run x
-  f <- foldConcurrentM run y
-  f . g <$> v
+foldConcurrentM run (Ap x y) =
+  foldConcurrentM run y <*> foldConcurrentM run x
 foldConcurrentM run (Join x) = do
   y <- foldConcurrentM run x
   foldConcurrentM run y
