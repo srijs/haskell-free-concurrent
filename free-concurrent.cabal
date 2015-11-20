@@ -2,7 +2,7 @@
 -- documentation, see http://haskell.org/cabal/users-guide/
 
 name:                free-concurrent
-version:             0.1.0.0
+version:             0.1.0.1
 synopsis:            Free monads suitable for concurrent computation
 -- description:         
 homepage:            https://github.com/srijs/haskell-free-concurrent
