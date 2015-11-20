@@ -1,8 +1,16 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE RankNTypes #-}
 
-module Control.Concurrent.Free where
+module Control.Concurrent.Free
+  ( F, liftF
+  , hoist
+  , retractA, retractM
+  , foldA, foldM
+  , foldConcurrentM
+  , retractConcurrentIO, foldConcurrentIO
+  ) where
 
+import Control.Applicative (liftA2)
 import Control.Concurrent
 import Control.Concurrent.MVar
 import Control.Exception (SomeException(..), try, throwIO)
