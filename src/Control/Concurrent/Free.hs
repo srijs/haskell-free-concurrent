@@ -25,7 +25,7 @@ data Concurrent f a where
   Par :: Par (Concurrent f) a -> Concurrent f a
 
 instance Functor (Concurrent f) where
-  fmap f x = Seq (fmap f (intoSeq x))
+  fmap f = _unseq %~ fmap f
 
 instance Applicative (Concurrent f) where
   pure = return
@@ -33,8 +33,8 @@ instance Applicative (Concurrent f) where
 
 instance Monad (Concurrent f) where
   return = Seq . pure
-  x >>= k = Seq (intoSeq x >>= intoSeq . k)
-  x >> y = Seq (intoSeq x >> intoSeq y)
+  x >>= k = x & _unseq %~ (>>= intoSeq . k)
+  x >> y = x & _unseq %~ (>> intoSeq y)
 
 lift :: f a -> Concurrent f a
 lift = Lift
