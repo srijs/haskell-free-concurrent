@@ -8,7 +8,7 @@ import Control.Concurrent.Free
 import Lens.Simple
 
 (>>~=) :: Concurrent f a -> (a -> Seq f b) -> Concurrent f b
-x >>~= k = x >>= fmap sequential k
+x >>~= k = x >>= sequential . k
 
 (>>~) :: Concurrent f a -> Seq f b -> Concurrent f b
 x >>~ y = x >> sequential y

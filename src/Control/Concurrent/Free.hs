@@ -33,7 +33,7 @@ instance Applicative (Concurrent f) where
 
 instance Monad (Concurrent f) where
   return = Seq . pure
-  x >>= k = Seq (intoSeq x >>= fmap intoSeq k)
+  x >>= k = Seq (intoSeq x >>= intoSeq . k)
   x >> y = Seq (intoSeq x >> intoSeq y)
 
 lift :: f a -> Concurrent f a
