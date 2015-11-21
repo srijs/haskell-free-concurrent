@@ -25,9 +25,7 @@ data Concurrent f a where
   Par :: Par (Concurrent f) a -> Concurrent f a
 
 instance Functor (Concurrent f) where
-  fmap f (Lift x) = Seq (fmap f (liftSeq (Lift x)))
-  fmap f (Seq x) = Seq (fmap f x)
-  fmap f (Par x) = Par (fmap f x)
+  fmap f x = Seq (fmap f (intoSeq x))
 
 instance Applicative (Concurrent f) where
   pure = return
@@ -35,10 +33,8 @@ instance Applicative (Concurrent f) where
 
 instance Monad (Concurrent f) where
   return = Seq . pure
-  Seq x >>= k = Seq (x >>= fmap liftSeq k)
-  x >>= k = Seq (liftSeq x >>= fmap liftSeq k)
-  Seq x >> y = Seq (x >> liftSeq y)
-  x >> y = Seq (liftSeq x >> liftSeq y)
+  x >>= k = Seq (intoSeq x >>= fmap intoSeq k)
+  x >> y = Seq (intoSeq x >> intoSeq y)
 
 lift :: f a -> Concurrent f a
 lift = Lift
@@ -71,7 +67,7 @@ foldConcurrentIO :: (forall x. f x -> IO x) -> Concurrent f a -> IO a
 foldConcurrentIO t = retractConcurrentIO . hoist t
 
 _unseq :: Lens (Concurrent f a) (Concurrent f b) (Seq (Concurrent f) a) (Seq (Concurrent f) b)
-_unseq = iso liftSeq Seq
+_unseq = iso intoSeq Seq
 
 _inseq :: Lens (Seq f a) (Concurrent f b) (Seq (Concurrent f) a) (Seq (Concurrent f) b)
 _inseq = iso (hoistSeq lift) Seq
@@ -84,7 +80,7 @@ sequential :: Seq f a -> Concurrent f a
 sequential = _inseq %~ id
 
 _unpar :: Lens (Concurrent f a) (Concurrent f b) (Par (Concurrent f) a) (Par (Concurrent f) b)
-_unpar = iso liftPar Par
+_unpar = iso intoPar Par
 
 _inpar :: Lens (Par f a) (Concurrent f b) (Par (Concurrent f) a) (Par (Concurrent f) b)
 _inpar = iso (hoistPar lift) Par
