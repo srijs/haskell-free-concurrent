@@ -2,114 +2,96 @@
 {-# LANGUAGE RankNTypes #-}
 
 module Control.Concurrent.Free
-  ( F, liftF
-  , hoist
-  , retractA, retractM
-  , foldA, foldM
-  , foldConcurrentM
+  ( module Control.Concurrent.Free.Seq
+  , module Control.Concurrent.Free.Par
+  , Concurrent, lift, hoist
+  , Interpreter(..), interpret
+  , retract, fold
   , retractConcurrentIO, foldConcurrentIO
+  , sequential, intoSeq, _unseq, _inseq
+  , parallel, intoPar, _unpar, _inpar
   ) where
 
-import Control.Applicative (liftA2)
-import Control.Concurrent
-import Control.Concurrent.MVar
-import Control.Exception (SomeException(..), try, throwIO)
-import Control.Monad (join)
+import Control.Concurrent.Free.Seq
+import Control.Concurrent.Free.Par
+import Control.Monad (ap)
 
--- | The combination of a free functor, a free applicative functor,
---   and free monad over @f@.
---
---   The semantics of the 'Functor', 'Applicative' and 'Monad' instances
---   are such that it tries to pick the lowest possible abstraction to
---   perform the operation.
---
---   This means that if a computation is constructed using 'fmap', 'pure'
---   and '<*>', it can be parallelised up until the point where the first
---   monadic 'join' sits.
-data F f a where
-  Pure :: a -> F f a
-  Lift :: f x -> (x -> a) -> F f a
-  Ap   :: F f a -> F f (a -> b) -> F f b
-  Join :: F f (F f a) -> F f a
+import Lens.Simple
 
-instance Functor (F f) where
-  fmap f (Pure a) = Pure (f a)
-  fmap f (Lift x g) = Lift x (f . g)
-  fmap f (Ap x y) = Ap x (fmap f <$> y)
-  fmap f (Join x) = Join (fmap f <$> x)
+-- | The combination of a free applicative functor and free monad over @f@.
+data Concurrent f a where
+  Lift :: f a -> Concurrent f a
+  Seq :: Seq (Concurrent f) a -> Concurrent f a
+  Par :: Par (Concurrent f) a -> Concurrent f a
 
-instance Applicative (F f) where
-  pure = Pure
-  Pure f <*> y = fmap f y
-  x <*> y = Ap y x
+instance Functor (Concurrent f) where
+  fmap f (Lift x) = Seq (fmap f (liftSeq (Lift x)))
+  fmap f (Seq x) = Seq (fmap f x)
+  fmap f (Par x) = Par (fmap f x)
 
-instance Monad (F f) where
-  return = pure
-  Pure x >>= f = f x
-  x >>= f = Join (fmap f x)
-  x >> y = x *> y
+instance Applicative (Concurrent f) where
+  pure = return
+  (<*>) = ap
 
--- | Lifts an @f a@ into a @F f a@.
-liftF :: f a -> F f a
-liftF x = Lift x id
+instance Monad (Concurrent f) where
+  return = Seq . pure
+  Seq x >>= k = Seq (x >>= fmap liftSeq k)
+  x >>= k = Seq (liftSeq x >>= fmap liftSeq k)
+  Seq x >> y = Seq (x >> liftSeq y)
+  x >> y = Seq (liftSeq x >> liftSeq y)
 
--- | Given a natural transformation from @f@ to @g@ this gives a monoidal natural transformation from @F f@ to @F g@.
-hoist :: (forall a. f a -> g a) -> F f a -> F g a
-hoist f (Pure a) = Pure a
-hoist f (Lift x g) = Lift (f x) g
-hoist f (Ap x y) = Ap (hoist f x) (hoist f y)
-hoist f (Join x) = Join (hoist f (fmap (hoist f) x))
+lift :: f a -> Concurrent f a
+lift = Lift
 
--- | Partially interprets the free monad over @f@ using the semantics for 'pure' and '<*>' given by the 'Applicative' instance for @f@. If it encounters a monadic join, the result is 'Nothing'.
-retractA :: Applicative f => F f a -> Maybe (f a)
-retractA (Pure a) = Just (pure a)
-retractA (Lift x g) = Just (fmap g x)
-retractA (Ap x y) = liftA2 (<*>) (retractA y) (retractA x)
-retractA (Join x) = Nothing
+hoist :: (forall x. f x -> g x) -> Concurrent f a -> Concurrent g a
+hoist t (Lift x) = Lift (t x)
+hoist t (Seq x) = Seq (hoistSeq (hoist t) x)
+hoist t (Par x) = Par (hoistPar (hoist t) x)
 
--- | Interprets the free monad over @f@ using the semantics for 'return' and '>>=' given by the 'Monad' instance for @f@.
-retractM :: Monad f => F f a -> f a
-retractM (Pure a) = pure a
-retractM (Lift x g) = fmap g x
-retractM (Ap x y) = retractM y <*> retractM x
-retractM (Join x) = join . retractM $ fmap retractM x
+data Interpreter f = Interpreter
+  { runSeq :: forall x. Seq f x -> f x
+  , runPar :: forall x. Par f x -> f x
+  }
 
--- | Interprets the free monad over @f@ using the
---   transformation from @f@ to @m m@.
---
---   The semantics of the concurrency are given by the transformation,
---   which produces a result that is unwrapped in two stages:
---   The first monadic layer should spawn the concurrent action,
---   and reveal the second layer, which should block
---   until the spawned action has returned with a result.
-foldConcurrentM :: Monad m => (forall x. f x -> m (m x)) -> F f a -> m a
-foldConcurrentM run (Pure a) = return a
-foldConcurrentM run (Lift x g) = run x >>= fmap g
-foldConcurrentM run (Ap x y) =
-  foldConcurrentM run y <*> foldConcurrentM run x
-foldConcurrentM run (Join x) = do
-  y <- foldConcurrentM run x
-  foldConcurrentM run y
+interpret :: Interpreter f -> Concurrent f a -> f a
+interpret int (Lift x) = x
+interpret int (Par x) = runPar int $ hoistPar (interpret int) x
+interpret int (Seq x) = runSeq int $ hoistSeq (interpret int) x
 
--- | Interprets the free monad over 'IO' using concurrent semantics, meaning multiple actions may run in parallel.
-retractConcurrentIO :: F IO a -> IO a
-retractConcurrentIO = foldConcurrentM $ \action -> do
-  v <- newEmptyMVar
-  forkIO $ try action >>= putMVar v
-  return $ do
-    r <- takeMVar v
-    case r of
-      Left (SomeException e) -> throwIO e
-      Right a -> return a
+retract :: Monad f => Concurrent f a -> f a
+retract = interpret (Interpreter retractSeq retractPar)
 
--- | Given a natural transformation from @f@ to @g@, this gives a partial monoidal natural transformation from @F f@ to @g@.
-foldA :: Applicative g => (forall x. f x -> g x) -> F f a -> Maybe (g a)
-foldA f = retractA . hoist f
+retractConcurrentIO :: Concurrent IO a -> IO a
+retractConcurrentIO = interpret (Interpreter retractSeq retractParIO)
 
--- | Given a natural transformation from @f@ to @m@, this gives a canonical monoidal natural transformation from @F f@ to @m@.
-foldM :: Monad m => (forall x. f x -> m x) -> F f a -> m a
-foldM f = retractM . hoist f
+fold :: Monad g => (forall x. f x -> g x) -> Concurrent f a -> g a
+fold t = retract . hoist t
 
--- | Given a natural transformation from @f@ to 'IO', this gives a natural transformation from @F f@ to @IO@ where the actions may run concurrently.
-foldConcurrentIO :: (forall x. f x -> IO x) -> F f a -> IO a
-foldConcurrentIO f = retractConcurrentIO . hoist f
+foldConcurrentIO :: (forall x. f x -> IO x) -> Concurrent f a -> IO a
+foldConcurrentIO t = retractConcurrentIO . hoist t
+
+_unseq :: Lens (Concurrent f a) (Concurrent f b) (Seq (Concurrent f) a) (Seq (Concurrent f) b)
+_unseq = iso liftSeq Seq
+
+_inseq :: Lens (Seq f a) (Concurrent f b) (Seq (Concurrent f) a) (Seq (Concurrent f) b)
+_inseq = iso (hoistSeq lift) Seq
+
+intoSeq :: Concurrent f a -> Seq (Concurrent f) a
+intoSeq (Seq x) = x
+intoSeq x = liftSeq x
+
+sequential :: Seq f a -> Concurrent f a
+sequential = _inseq %~ id
+
+_unpar :: Lens (Concurrent f a) (Concurrent f b) (Par (Concurrent f) a) (Par (Concurrent f) b)
+_unpar = iso liftPar Par
+
+_inpar :: Lens (Par f a) (Concurrent f b) (Par (Concurrent f) a) (Par (Concurrent f) b)
+_inpar = iso (hoistPar lift) Par
+
+parallel :: Par f a -> Concurrent f a
+parallel = _inpar %~ id
+
+intoPar :: Concurrent f a -> Par (Concurrent f) a
+intoPar (Par x) = x
+intoPar x = liftPar x
